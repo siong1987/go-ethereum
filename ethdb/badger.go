@@ -97,13 +97,14 @@ func (db *BadgerDatabase) collectGarbage() error {
 func (db *BadgerDatabase) runGC() {
 	ticker := time.NewTicker(cgInterval)
 	for {
-		timestamp := ticker.C
-
-		err := db.collectGarbage()
-		if err == nil {
-			db.log.Info("Garbage collected", "timestamp", timestamp)
-		} else {
-			db.log.Error("Garbage collection errored: %v", err)
+		select {
+		case <-ticker.C:
+			err := db.collectGarbage()
+			if err == nil {
+				db.log.Info("Garbage collected")
+			} else {
+				db.log.Error("Garbage collection errored: %v", err)
+			}
 		}
 	}
 }
