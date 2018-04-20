@@ -99,11 +99,12 @@ func (db *BadgerDatabase) runGC() {
 	for {
 		select {
 		case <-ticker.C:
+			db.log.Info("Start garbage collectiong...")
 			err := db.collectGarbage()
 			if err == nil {
 				db.log.Info("Garbage collected")
 			} else {
-				db.log.Error("Garbage collection errored: %v", err)
+				db.log.Error("Failed to collect garbage", "err", err)
 			}
 		}
 	}
