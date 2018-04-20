@@ -21,39 +21,45 @@ import (
 	//"strings"
 	"sync"
 	"time"
-	
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/metrics"
+
 	"github.com/dgraph-io/badger"
 	"github.com/dgraph-io/badger/options"
 	"github.com/ethereum/go-ethereum/common"
-	
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
-
-
 type BadgerDatabase struct {
-	fn 				string      // filename for reporting
-	db				*badger.DB 
-	getTimer       metrics.Timer // Timer for measuring the database get request counts and latencies
-	putTimer       metrics.Timer // Timer for measuring the database put request counts and latencies
-	delTimer       metrics.Timer // Timer for measuring the database delete request counts and latencies
-	missMeter      metrics.Meter // Meter for measuring the missed database get requests
-	readMeter      metrics.Meter // Meter for measuring the database get request data usage
-	writeMeter     metrics.Meter // Meter for measuring the database put request data usage
-	batchPutTimer  		metrics.Timer
-	batchWriteTimer 	metrics.Timer
-	batchWriteMeter		metrics.Meter
+	fn              string // filename for reporting
+	db              *badger.DB
+	getTimer        metrics.Timer // Timer for measuring the database get request counts and latencies
+	putTimer        metrics.Timer // Timer for measuring the database put request counts and latencies
+	delTimer        metrics.Timer // Timer for measuring the database delete request counts and latencies
+	missMeter       metrics.Meter // Meter for measuring the missed database get requests
+	readMeter       metrics.Meter // Meter for measuring the database get request data usage
+	writeMeter      metrics.Meter // Meter for measuring the database put request data usage
+	batchPutTimer   metrics.Timer
+	batchWriteTimer metrics.Timer
+	batchWriteMeter metrics.Meter
 
-	quitLock sync.Mutex      // Mutex protecting the quit channel access
+	quitLock sync.Mutex // Mutex protecting the quit channel access
 
 	log log.Logger // Contextual logger tracking the database path
 }
 
+const (
+	// discardRatio represents the discard ratio for the badger GC
+	// https://godoc.org/github.com/dgraph-io/badger#DB.RunValueLogGC
+	discardRatio = 0.5
+
+	// GC interval
+	cgInterval = 10 * time.Minute
+)
+
 // NewBadgerDatabase returns a BadgerDB wrapped object.
 func NewBadgerDatabase(file string) (*BadgerDatabase, error) {
 	logger := log.New("database", file)
-	
+
 	opts := badger.DefaultOptions
 	opts.Dir = file
 	opts.ValueDir = file
@@ -71,8 +77,35 @@ func NewBadgerDatabase(file string) (*BadgerDatabase, error) {
 		db:  db,
 		log: logger,
 	}
-	
+
+	go ret.runGC()
+
 	return ret, nil
+}
+
+// collectGarbage runs the garbage collection for Badger backend db
+func (db *BadgerDatabase) collectGarbage() error {
+	if err := db.db.PurgeOlderVersions(); err != nil {
+		return err
+	}
+
+	return db.db.RunValueLogGC(discardRatio)
+}
+
+// runGC triggers the garbage collection for the Badger backend db.
+// Should be run as a goroutine
+func (db *BadgerDatabase) runGC() {
+	ticker := time.NewTicker(cgInterval)
+	for {
+		timestamp := ticker.C
+
+		err := db.collectGarbage()
+		if err == nil {
+			db.log.Info("Garbage collected", "timestamp", timestamp)
+		} else {
+			db.log.Error("Garbage collection errored: %v", err)
+		}
+	}
 }
 
 // Path returns the path to the database directory.
@@ -81,7 +114,7 @@ func (db *BadgerDatabase) Path() string {
 }
 
 // Put puts the given key / value to the queue
-func (db *BadgerDatabase) Put(key []byte, value []byte) error {	
+func (db *BadgerDatabase) Put(key []byte, value []byte) error {
 	if db.putTimer != nil {
 		defer db.putTimer.UpdateSince(time.Now())
 	}
@@ -89,11 +122,10 @@ func (db *BadgerDatabase) Put(key []byte, value []byte) error {
 	if db.writeMeter != nil {
 		db.writeMeter.Mark(int64(len(value)))
 	}
-	
-	
+
 	return db.db.Update(func(txn *badger.Txn) error {
-  		err := txn.Set(key, value)
-  		return err
+		err := txn.Set(key, value)
+		return err
 	})
 }
 
@@ -140,7 +172,7 @@ func (db *BadgerDatabase) Get(key []byte) (dat []byte, err error) {
 		}
 		return nil, err
 	}
-	
+
 	return dat, nil
 }
 
@@ -151,19 +183,19 @@ func (db *BadgerDatabase) Delete(key []byte) error {
 		defer db.delTimer.UpdateSince(time.Now())
 	}
 	return db.db.Update(func(txn *badger.Txn) error {
-  		err := txn.Delete(key)
+		err := txn.Delete(key)
 		if err == badger.ErrKeyNotFound {
 			err = nil
 		}
-  		return err
+		return err
 	})
 }
 
 type badgerIterator struct {
-	txn 				*badger.Txn
-	internIterator		*badger.Iterator
-	released			bool
-	initialised			bool
+	txn            *badger.Txn
+	internIterator *badger.Iterator
+	released       bool
+	initialised    bool
 }
 
 func (it *badgerIterator) Release() {
@@ -177,7 +209,7 @@ func (it *badgerIterator) Released() bool {
 }
 
 func (it *badgerIterator) Next() bool {
-	if(!it.initialised) {
+	if !it.initialised {
 		it.internIterator.Rewind()
 		it.initialised = true
 	} else {
@@ -243,8 +275,8 @@ func (db *BadgerDatabase) NewBatch() Batch {
 }
 
 type badgerBatch struct {
-	db		*BadgerDatabase
-	b		map[string][]byte
+	db   *BadgerDatabase
+	b    map[string][]byte
 	size int
 }
 
@@ -252,7 +284,7 @@ func (b *badgerBatch) Put(key, value []byte) error {
 	if b.db.batchPutTimer != nil {
 		defer b.db.batchPutTimer.UpdateSince(time.Now())
 	}
-	
+
 	b.b[string(key)] = common.CopyBytes(value)
 	b.size += len(value)
 	return nil
@@ -266,12 +298,12 @@ func (b *badgerBatch) Write() (err error) {
 	if b.db.batchWriteMeter != nil {
 		b.db.batchWriteMeter.Mark(int64(b.size))
 	}
-	
+
 	err = b.db.db.Update(func(txn *badger.Txn) error {
-  		for key, value := range b.b {
+		for key, value := range b.b {
 			err = txn.Set([]byte(key), value)
 		}
-  		return err
+		return err
 	})
 	b.size = 0
 	b.b = make(map[string][]byte)
