@@ -924,10 +924,9 @@ func (bc *BlockChain) WriteBlockWithState(block *types.Block, receipts []*types.
 				size  = triedb.Size()
 				limit = common.StorageSize(bc.cacheConfig.TrieNodeLimit) * 1024 * 1024
 			)
-			if size > 8*limit  {
+			if size > limit || bc.gcproc > bc.cacheConfig.TrieTimeLimit {
 				// If we're exceeding limits but haven't reached a large enough memory gap,
 				// warn the user that the system is becoming unstable.
-				/*
 				if chosen < lastWrite+triesInMemory {
 					switch {
 					case size >= 2*limit:
@@ -936,7 +935,6 @@ func (bc *BlockChain) WriteBlockWithState(block *types.Block, receipts []*types.
 						log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", bc.cacheConfig.TrieTimeLimit, "optimum", float64(chosen-lastWrite)/triesInMemory)
 					}
 				}
-				*/
 				// If optimum or critical limits reached, write to disk
 				if chosen >= lastWrite+triesInMemory || size >= 2*limit || bc.gcproc >= 2*bc.cacheConfig.TrieTimeLimit {
 					triedb.Commit(header.Root, true)
