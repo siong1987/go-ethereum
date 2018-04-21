@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
+	"github.com/golang/snappy"
 )
 
 type BadgerDatabase struct {
@@ -126,6 +127,7 @@ func (db *BadgerDatabase) Put(key []byte, value []byte) error {
 	}
 
 	return db.db.Update(func(txn *badger.Txn) error {
+		value = snappy.Encode(nil, value)
 		err := txn.Set(key, value)
 		return err
 	})
@@ -162,6 +164,10 @@ func (db *BadgerDatabase) Get(key []byte) (dat []byte, err error) {
 			return err
 		}
 		dat = common.CopyBytes(val)
+		dat, err = snappy.Decode(nil, dat)
+		if err != nil {
+			return err
+		}
 		return nil
 	})
 	//Update the actually retrieved amount of data
@@ -303,6 +309,7 @@ func (b *badgerBatch) Write() (err error) {
 
 	err = b.db.db.Update(func(txn *badger.Txn) error {
 		for key, value := range b.b {
+			value = snappy.Encode(nil, value)
 			err = txn.Set([]byte(key), value)
 		}
 		return err
